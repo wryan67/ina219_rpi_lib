@@ -1,11 +1,8 @@
 
-all:  vc knobtest 
-
-vc: VoltageCatcher.cpp
-	g++ -O2 -lwiringPi -lwiringPiADS1115rpi VoltageCatcher.cpp -o vc
+all:  knobtest 
 
 knobtest: knobtest.cpp
-	gcc -O2 -lwiringPi -lwiringPiADS1115rpi knobtest.cpp -o knobtest
+	gcc -O2 -lwiringPi knobtest.cpp -o knobtest
 
 clean:
 	rm -f vc knobtest 

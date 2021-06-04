@@ -86,6 +86,9 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  printf("not implemented yet\n");
+  exit(1);
+
   printf("use -h to get help on command line options\n");
   printf("accessing ads1115 chip on i2c address 0x%02x\n", ADS1115_ADDRESS);
   int ADS1115_HANDLE = getADS1115Handle(ADS1115_ADDRESS);
