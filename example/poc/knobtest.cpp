@@ -25,6 +25,7 @@
 #define INA219_CurrentRegister       0x04
 #define INA219_CalibrationRegister   0x05
 
+int maxBusVoltage = 16;  // valid values are 16 or 32
 
 struct ina219Config {
                                 //   bit
@@ -134,30 +135,28 @@ uint16_t config2int(struct ina219Config config) {
 
 int main(int argc, char **argv) {
 
-  	int ina219_handle;
+    struct ina219Config config;
+    int    ina219_handle;
+    int    ina219_address = 0x40;		// 0x40 is the default address on i2c bus for ina219
 
-	int ina219_address = 0x40;		// 0x40 is the default address on i2c bus for ina219
-
-		// open i2c device
+    // open i2c device
 	if ((ina219_handle = wiringPiI2CSetup(ina219_address)) < 0) {
 		printf("Error: Couldn't open device 0x%02x: %s\n", ina219_address, strerror(errno));
 		exit(EXIT_FAILURE);
 	}
-
-
  	printf("connected to 0x%02x via wiringPi\n", ina219_address);
 
 
-    struct ina219Config config;
+    float busVoltageFSR = (maxBusVoltage==16)?4000:8000; 
 
 
     config.reset       = 0;  // 0=no action; 1=reset
     config.busVoltage  = 0;  // 0=16v; 1=32v
-    config.pga         = 3;  // 3=+/ 320mv
+    config.pga         = 3;  // 3=+/ 320mv  (/8)
 
-    config.badcMode    = 0;  // 0=single shot
+    config.badcMode    = 1;  // 0=single shot
     config.badc        = 3;  // 12 bit precision
-    config.sadcMode    = 0;  // 0=single shot
+    config.sadcMode    = 1;  // 0=single shot
     config.sadc        = 3;  // 12 bit precision
     config.mode        = 3;  // shunt & bus; continuous
 
@@ -187,7 +186,17 @@ int main(int argc, char **argv) {
 		val3 = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_PowerRegister));
 		val4 = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_CurrentRegister));
 
-		printf("%lld   0x%04x 0x%04x 0x%04x   0x%04x",currentTimeMillis(), val1, val2, val3, val4);
+                float vBus = maxBusVoltage*((val2&0xfff8)>>3)/busVoltageFSR;
+                float vShunt = maxBusVoltage*(val1)/32000.0;
+		bool  overflow = val2 & 0x01;
+                bool  conversionReady = (val2&0x02)>>1;
+
+		if (overflow) {
+		    printf("%lld   overflow\n");
+ 		} else {
+		    printf("%lld   0x%04x 0x%04x 0x%04x   0x%04x ovf=%d cnvr=%d vBus=%.3f vShunt=%.4f",
+                        currentTimeMillis(), val1, val2, val3, val4, overflow, conversionReady, vBus, vShunt);
+		}
 		printf("\r"); fflush(stdout);
                 delay(100);
 	}

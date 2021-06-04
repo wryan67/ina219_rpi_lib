@@ -1,8 +1,8 @@
 
 all:  knobtest 
 
-knobtest: knobtest.c
-	gcc -O2 -lwiringPi knobtest.c -o knobtest
+knobtest: knobtest.cpp
+	g++ -O2 -lwiringPi knobtest.cpp -o knobtest
 
 clean:
 	rm -f knobtest
