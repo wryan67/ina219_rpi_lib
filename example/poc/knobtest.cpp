@@ -25,13 +25,17 @@
 #define INA219_CurrentRegister       0x04
 #define INA219_CalibrationRegister   0x05
 
-int maxBusVoltage = 16;  // valid values are 16 or 32
 
 struct ina219Config {
+    double rShuntOhms;  
+    double sourceVoltage;       // Source Voltage; valid values are 0 to max bus voltage;
+
+    double currentLSB;          // internal use only
+
                                 //   bit
     int reset;                  //    15  1=set all default values
     int na;                     //    14  na
-    int busVoltage;             //    13  bus voltage (FSR): 0=16v; 1=32v (default); 
+    int busVoltageFSR;          //    13  bus voltage (FSR): 0=16v; 1=32v (default); 
     int pga;                    // 11-12  PGA gain & range
                                 //        Value  Gain   Range
                                 //        ------ ---- ----------
@@ -82,6 +86,7 @@ struct ina219Config {
                                 //        6 (110)  Bus voltage, continuous
                                 //        7 (111)  Shunt and bus, continuous (default)
      
+
 };
 
 unsigned long long currentTimeMillis() {
@@ -95,12 +100,12 @@ unsigned long long currentTimeMillis() {
 uint16_t configHi(struct ina219Config config) {
     uint16_t high=0;
 
-    high |= (0x01 & config.reset)       << 7;  // 1 bit   
-    high |= (0x01 & config.na)          << 6;  // 1 bit   
-    high |= (0x01 & config.busVoltage)  << 5;  // 1 bits
-    high |= (0x03 & config.pga)         << 3;  // 2 bits
-    high |= (0x01 & config.badcMode)    << 2;  // 1 bit
-    high |= (0x06 & config.badc)        >> 1;  // 2 most significant bits
+    high |= (0x01 & config.reset)          << 7;  // 1 bit   
+    high |= (0x01 & config.na)             << 6;  // 1 bit   
+    high |= (0x01 & config.busVoltageFSR)  << 5;  // 1 bits
+    high |= (0x03 & config.pga)            << 3;  // 2 bits
+    high |= (0x01 & config.badcMode)       << 2;  // 1 bit
+    high |= (0x06 & config.badc)           >> 1;  // 2 most significant bits
 
     return high;
 }
@@ -115,29 +120,18 @@ uint16_t configLo(struct ina219Config config) {
     return low;
 }
 uint16_t config2int(struct ina219Config config) {
-    uint16_t high=0;
-    uint16_t low=0;
-
-    high |= (0x01 & config.reset)       << 7;  // 1 bit   
-    high |= (0x01 & config.na)          << 6;  // 1 bit   
-    high |= (0x01 & config.busVoltage)  << 5;  // 1 bits
-    high |= (0x03 & config.pga)         << 3;  // 2 bits
-    high |= (0x01 & config.badcMode)    << 2;  // 1 bit
-    high |= (0x06 & config.badc)        >> 1;  // 2 most significant bits
-
-    low |= (0x01 & config.badc)         << 7;  // least significant bit
-    low |= (0x01 & config.sadcMode)     << 6;  // 1 bits
-    low |= (0x07 & config.sadc)         << 3;  // 3 bits
-    low |= (0x07 & config.mode)         << 0;  // 3 bits  
+    uint16_t high= configHi(config);
+    uint16_t low = configLo(config);
 
     return (high << 8)|low;
 }
 
 int main(int argc, char **argv) {
 
-    struct ina219Config config;
-    int    ina219_handle;
-    int    ina219_address = 0x40;		// 0x40 is the default address on i2c bus for ina219
+    struct  ina219Config config;
+    int     ina219_handle;
+    int     ina219_address = 0x40;		// 0x40 is the default address on i2c bus for ina219
+    int16_t calibrationValue;
 
     // open i2c device
 	if ((ina219_handle = wiringPiI2CSetup(ina219_address)) < 0) {
@@ -147,57 +141,93 @@ int main(int argc, char **argv) {
  	printf("connected to 0x%02x via wiringPi\n", ina219_address);
 
 
-    float busVoltageFSR = (maxBusVoltage==16)?4000:8000; 
+    int adcMode        = 1;  // 0=single shot; 1=averageing
+    int adcPrecision   = 3;  // 12 bit precision
+
+    config.rShuntOhms     = 10; 
+    config.sourceVoltage  = 15; 
 
 
-    config.reset       = 0;  // 0=no action; 1=reset
-    config.busVoltage  = 0;  // 0=16v; 1=32v
-    config.pga         = 3;  // 3=+/ 320mv  (/8)
+    config.reset          = 0;  // 0=no action; 1=reset
+    config.busVoltageFSR  = 0;  // 0=16v; 1=32v
+    config.pga            = 3;  // 3=[+/-] 320mv (/8)
 
-    config.badcMode    = 1;  // 0=single shot
-    config.badc        = 3;  // 12 bit precision
-    config.sadcMode    = 1;  // 0=single shot
-    config.sadc        = 3;  // 12 bit precision
-    config.mode        = 3;  // shunt & bus; continuous
+    config.badcMode    = adcMode;
+    config.badc        = adcPrecision;
+    config.sadcMode    = adcMode;
+    config.sadc        = adcPrecision;
+    config.mode        = 7;  // shunt & bus; continuous
+    
 
+    printf("configuration: 0x%04x\n",config2int(config));
 
 	if (wiringPiI2CWriteReg16(ina219_handle, INA219_ConfigurationRegister, 0xff)!=0) { // reset
 		perror("Write to config register");
 		exit(EXIT_FAILURE);
 	}
         delay(10);
+
+	// v=ir;  i=v/r
+        config.currentLSB = (config.sourceVoltage / config.rShuntOhms) / 32768;
+	calibrationValue = 0.04096 / (config.currentLSB * config.rShuntOhms);
+
+	if (wiringPiI2CWriteReg16(ina219_handle, INA219_CalibrationRegister, __bswap_16(calibrationValue))!=0) {
+		perror("Write to config register");
+		exit(EXIT_FAILURE);
+	}
 	if (wiringPiI2CWriteReg16(ina219_handle, INA219_ConfigurationRegister, __bswap_16(config2int(config)))!=0) {
 		perror("Write to config register");
 		exit(EXIT_FAILURE);
 	}
 
-    	int16_t val1, val2, val3, val4;
+    	int16_t busVal, shuntVal, currentVal, powerVal;
 
+        float pgaFSD=0;
+        int16_t signMask=0;
+	switch (config.pga) {
+		case 3: pgaFSD = 32000; signMask=0xffff; break;   // Gain = /8
+		case 2: pgaFSD = 16000; signMask=0xBfff; break;   // Gain = /4
+		case 1: pgaFSD =  8000; signMask=0x9fff; break;   // Gain = /2
+		case 0: pgaFSD =  4000; signMask=0x8fff; break;   // Gain = /1
+        }
 
-	printf("%-13s    shunt    bus  power  current\n", "timestamp");
-	while (1) {
-		if (wiringPiI2CWriteReg16(ina219_handle, INA219_ConfigurationRegister, __bswap_16(config2int(config)))!=0) {
-			perror("Write to config register");
-			exit(EXIT_FAILURE);
-		}
-		delay(1);
-		val1 = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_ShuntVoltageRegister));
-		val2 = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_BusVoltageRegister));
-		val3 = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_PowerRegister));
-		val4 = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_CurrentRegister));
+	printf("%-13s    shunt    bus  current  power\n", "timestamp");
+        float lastShunt=0;
+	while (true) {
+	if (wiringPiI2CWriteReg16(ina219_handle, INA219_CalibrationRegister, __bswap_16(calibrationValue))!=0) {
+		perror("Write to config register");
+		exit(EXIT_FAILURE);
+	}
+		busVal = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_BusVoltageRegister));
+               	bool conversionReady = (busVal&0x02)>>1;
 
-                float vBus = maxBusVoltage*((val2&0xfff8)>>3)/busVoltageFSR;
-                float vShunt = maxBusVoltage*(val1)/32000.0;
-		bool  overflow = val2 & 0x01;
-                bool  conversionReady = (val2&0x02)>>1;
+    		while (!conversionReady) {
+                  //usleep(84);
+		  busVal = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_BusVoltageRegister));
+                  conversionReady = (busVal&0x02)>>1;
+           	}
+		shuntVal   = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_ShuntVoltageRegister));
+		currentVal = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_CurrentRegister));
+		powerVal   = __bswap_16(wiringPiI2CReadReg16(ina219_handle, INA219_PowerRegister));
+
+		bool  overflow = busVal & 0x01;
 
 		if (overflow) {
 		    printf("%lld   overflow\n");
  		} else {
-		    printf("%lld   0x%04x 0x%04x 0x%04x   0x%04x ovf=%d cnvr=%d vBus=%.3f vShunt=%.4f",
-                        currentTimeMillis(), val1, val2, val3, val4, overflow, conversionReady, vBus, vShunt);
+                    float  maxBusVoltage = (config.busVoltageFSR==0)?16:32; 
+                    float  busVoltageFSRDivisor  = (config.busVoltageFSR==0)?4000:8000; 
+                    float  vBus    = maxBusVoltage*(busVal>>3)/busVoltageFSRDivisor;
+                    float  vShunt  = maxBusVoltage*(shuntVal&signMask)/pgaFSD;
+  		    double current = config.currentLSB * currentVal;
+
+		    if (vShunt!=lastShunt) {
+  		      printf("%lld   0x%04x 0x%04x  0x%04x  0x%04x cnvr=%d Vdd=%.3f vBus=%.3f vShunt=%.4f current=%f",
+                        currentTimeMillis(), shuntVal, busVal, currentVal, powerVal, 
+                        conversionReady, vBus+vShunt, vBus, vShunt, current);
+ 		      lastShunt=vShunt;
+		    }
 		}
 		printf("\r"); fflush(stdout);
-                delay(100);
 	}
 }
