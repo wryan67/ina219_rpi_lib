@@ -1,5 +1,5 @@
 # INA219 Raspberry Pi Library
-This library reads the INA219 chip and returns the values caputred by the chip.
+The INA219 is a current shunt and power monitor.  This library reads the INA219 chip and returns the values caputred by the chip.
  The example app will read an INA219 chip and print the voltage, power, and current values.
 
 Copyright (c) 2021 Wade Ryan
